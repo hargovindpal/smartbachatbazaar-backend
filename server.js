@@ -7,8 +7,6 @@ const { v2: cloudinary } = require("cloudinary");
 const streamifier = require("streamifier");
 
 const app = express();
-
-// ✅ IMPORTANT FOR RENDER
 const PORT = process.env.PORT || 5000;
 
 app.use(cors());
@@ -23,7 +21,6 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Use memory storage instead of disk
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ---------------------------------------------------
@@ -31,25 +28,39 @@ const upload = multer({ storage: multer.memoryStorage() });
 // ---------------------------------------------------
 const dataPath = path.join(__dirname, "data", "products.json");
 
+// Utility: Ensure JSON exists
+function ensureDataFile() {
+  if (!fs.existsSync(dataPath)) {
+    fs.writeFileSync(dataPath, "[]");
+  }
+}
+
+// Utility: Read products
+function readProducts() {
+  ensureDataFile();
+  const raw = fs.readFileSync(dataPath);
+  return raw.length ? JSON.parse(raw) : [];
+}
+
+// Utility: Save products
+function saveProducts(data) {
+  fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+}
+
 // ---------------------------------------------------
-// ✅ GET All Products
+// ✅ GET ALL PRODUCTS
 // ---------------------------------------------------
 app.get("/products", (req, res) => {
   try {
-    if (!fs.existsSync(dataPath)) {
-      return res.json([]);
-    }
-
-    const data = fs.readFileSync(dataPath);
-    res.json(JSON.parse(data));
-
+    const products = readProducts();
+    res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // ---------------------------------------------------
-// ✅ ADD Product (Cloudinary Upload)
+// ✅ ADD PRODUCT (Cloudinary Upload)
 // ---------------------------------------------------
 app.post("/products", upload.single("image"), async (req, res) => {
   try {
@@ -63,15 +74,9 @@ app.post("/products", upload.single("image"), async (req, res) => {
       offer,
     } = req.body;
 
-    if (!category) {
-      return res.status(400).json({ error: "Category required" });
-    }
+    if (!category) return res.status(400).json({ error: "Category required" });
+    if (!req.file) return res.status(400).json({ error: "Image required" });
 
-    if (!req.file) {
-      return res.status(400).json({ error: "Image required" });
-    }
-
-    // Upload image to Cloudinary
     const uploadFromBuffer = () =>
       new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
@@ -86,23 +91,15 @@ app.post("/products", upload.single("image"), async (req, res) => {
 
     const result = await uploadFromBuffer();
 
-    // Ensure JSON file exists
-    if (!fs.existsSync(dataPath)) {
-      fs.writeFileSync(dataPath, "[]");
-    }
+    const data = readProducts();
 
-    const raw = fs.readFileSync(dataPath);
-    const data = raw.length ? JSON.parse(raw) : [];
-
-    let maxId = 199;
-    if (data.length > 0) {
-      maxId = Math.max(...data.map(p => Number(p.id) || 199));
-    }
-
-    const newId = (maxId + 1).toString();
+    const maxId =
+      data.length > 0
+        ? Math.max(...data.map((p) => Number(p.id) || 199))
+        : 199;
 
     const newProduct = {
-      id: newId,
+      id: (maxId + 1).toString(),
       item_info,
       seller: "Sanjay Smart Gadgets",
       current_price: Number(current_price),
@@ -111,17 +108,99 @@ app.post("/products", upload.single("image"), async (req, res) => {
       delivery: Number(delivery),
       offer,
       category,
-      item_image: result.secure_url,  // 🔥 Cloudinary URL
+      item_image: result.secure_url,
     };
 
     data.push(newProduct);
-    fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
+    saveProducts(data);
 
     res.json({ message: "Product added", product: newProduct });
-
   } catch (error) {
     console.error("SERVER ERROR:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------------------------------------
+// ✅ DELETE PRODUCT
+// ---------------------------------------------------
+app.delete("/products/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let data = readProducts();
+    const filtered = data.filter((p) => p.id !== id);
+
+    if (data.length === filtered.length) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    saveProducts(filtered);
+    res.json({ message: "Product deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------
+// ✅ UPDATE PRODUCT (EDIT)
+// ---------------------------------------------------
+app.put("/products/:id", upload.single("image"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    let data = readProducts();
+
+    const index = data.findIndex((p) => p.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: "Product not found" });
+    }
+
+    const {
+      item_info,
+      current_price,
+      actual_price,
+      discount,
+      delivery,
+      category,
+      offer,
+    } = req.body;
+
+    let imageUrl = data[index].item_image;
+
+    // If new image uploaded → update in Cloudinary
+    if (req.file) {
+      const uploadFromBuffer = () =>
+        new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "smartbachatbazaar" },
+            (error, result) => {
+              if (result) resolve(result);
+              else reject(error);
+            }
+          );
+          streamifier.createReadStream(req.file.buffer).pipe(stream);
+        });
+
+      const result = await uploadFromBuffer();
+      imageUrl = result.secure_url;
+    }
+
+    data[index] = {
+      ...data[index],
+      item_info,
+      current_price: Number(current_price),
+      actual_price: Number(actual_price),
+      discount: Number(discount),
+      delivery: Number(delivery),
+      category,
+      offer,
+      item_image: imageUrl,
+    };
+
+    saveProducts(data);
+    res.json({ message: "Product updated successfully", product: data[index] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
