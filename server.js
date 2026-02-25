@@ -3,6 +3,8 @@ const cors = require("cors");
 const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
+const { v2: cloudinary } = require("cloudinary");
+const streamifier = require("streamifier");
 
 const app = express();
 
@@ -13,45 +15,26 @@ app.use(cors());
 app.use(express.json());
 
 // ---------------------------------------------------
-// ✅ Proper Paths
+// ✅ CLOUDINARY CONFIG
 // ---------------------------------------------------
-const publicPath = path.join(__dirname, "../public");
-const dataPath = path.join(__dirname, "data", "products.json");
-
-// Serve React static if needed (optional for Render backend)
-app.use(express.static(publicPath));
-
-// ---------------------------------------------------
-// ✅ MULTER SETUP
-// ---------------------------------------------------
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const category = req.body.category;
-
-    const uploadPath = path.join(
-      publicPath,
-      "item-category",
-      category
-    );
-
-    if (!fs.existsSync(uploadPath)) {
-      fs.mkdirSync(uploadPath, { recursive: true });
-    }
-
-    cb(null, uploadPath);
-  },
-
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const upload = multer({ storage });
+// Use memory storage instead of disk
+const upload = multer({ storage: multer.memoryStorage() });
+
+// ---------------------------------------------------
+// ✅ DATA PATH
+// ---------------------------------------------------
+const dataPath = path.join(__dirname, "data", "products.json");
 
 // ---------------------------------------------------
 // ✅ GET All Products
 // ---------------------------------------------------
-app.get("https://smartbachatbazaar-api.onrender.com/products", (req, res) => {
+app.get("/products", (req, res) => {
   try {
     if (!fs.existsSync(dataPath)) {
       return res.json([]);
@@ -66,9 +49,9 @@ app.get("https://smartbachatbazaar-api.onrender.com/products", (req, res) => {
 });
 
 // ---------------------------------------------------
-// ✅ ADD Product
+// ✅ ADD Product (Cloudinary Upload)
 // ---------------------------------------------------
-app.post("https://smartbachatbazaar-api.onrender.com/products", upload.single("image"), (req, res) => {
+app.post("/products", upload.single("image"), async (req, res) => {
   try {
     const {
       item_info,
@@ -88,6 +71,22 @@ app.post("https://smartbachatbazaar-api.onrender.com/products", upload.single("i
       return res.status(400).json({ error: "Image required" });
     }
 
+    // Upload image to Cloudinary
+    const uploadFromBuffer = () =>
+      new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: "smartbachatbazaar" },
+          (error, result) => {
+            if (result) resolve(result);
+            else reject(error);
+          }
+        );
+        streamifier.createReadStream(req.file.buffer).pipe(stream);
+      });
+
+    const result = await uploadFromBuffer();
+
+    // Ensure JSON file exists
     if (!fs.existsSync(dataPath)) {
       fs.writeFileSync(dataPath, "[]");
     }
@@ -112,11 +111,10 @@ app.post("https://smartbachatbazaar-api.onrender.com/products", upload.single("i
       delivery: Number(delivery),
       offer,
       category,
-      item_image: `/item-category/${category}/${req.file.filename}`,
+      item_image: result.secure_url,  // 🔥 Cloudinary URL
     };
 
     data.push(newProduct);
-
     fs.writeFileSync(dataPath, JSON.stringify(data, null, 2));
 
     res.json({ message: "Product added", product: newProduct });
