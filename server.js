@@ -51,7 +51,7 @@ const upload = multer({ storage });
 // ---------------------------------------------------
 // ✅ GET All Products
 // ---------------------------------------------------
-app.get("/products", (req, res) => {
+app.get("https://smartbachatbazaar-api.onrender.com/products", (req, res) => {
   try {
     if (!fs.existsSync(dataPath)) {
       return res.json([]);
@@ -68,7 +68,7 @@ app.get("/products", (req, res) => {
 // ---------------------------------------------------
 // ✅ ADD Product
 // ---------------------------------------------------
-app.post("/products", upload.single("image"), (req, res) => {
+app.post("https://smartbachatbazaar-api.onrender.com/products", upload.single("image"), (req, res) => {
   try {
     const {
       item_info,
